@@ -1,7 +1,4 @@
 #include "CSCheat.h"
-
-#include <process.h>
-using namespace std;
 #pragma warning(disable:4244)
 
 game_data g_data;			//游戏全局数据
@@ -11,10 +8,53 @@ BOOL WINAPI DllMain(_In_ void* _DllHandle, _In_ unsigned long _Reason, _In_opt_ 
 {
 	if (_Reason == DLL_PROCESS_ATTACH)
 	{
+		g_data.dll_module = _DllHandle;
+		hide_self(_DllHandle);//需要从外部卸载DLL就注释这个函数
 		DisableThreadLibraryCalls((HMODULE)_DllHandle);
 		_beginthread(_beginthread_proc, 0, NULL);
 	}
+	if (_Reason == DLL_PROCESS_DETACH)
+	{
+		SetWindowLongPtrA(g_data.game_hwnd, GWLP_WNDPROC, LONG_PTR(g_data.old_proc));
+		g_data.d3d_hook.ReduceAllAddress();
+	}
 	return TRUE;
+}
+
+void hide_self(void* module)
+{
+	void* pPEB = nullptr;
+
+	//读取PEB指针
+	_asm
+	{
+		push eax
+		mov eax, fs:[0x30]
+		mov pPEB, eax
+		pop eax
+	}
+
+	//操作得到保存全部模块的双向链表头指针
+	void* pLDR = *((void**)((unsigned char*)pPEB + 0xc));
+	void* pCurrent = *((void**)((unsigned char*)pLDR + 0x0c));
+	void* pNext = pCurrent;
+
+	//对链表进行遍历，对指定模块进行断链隐藏
+	do
+	{
+		void* pNextPoint = *((void**)((unsigned char*)pNext));
+		void* pLastPoint = *((void**)((unsigned char*)pNext + 0x4));
+		void* nBaseAddress = *((void**)((unsigned char*)pNext + 0x18));
+
+		if (nBaseAddress == module)
+		{
+			*((void**)((unsigned char*)pLastPoint)) = pNextPoint;
+			*((void**)((unsigned char*)pNextPoint + 0x4)) = pLastPoint;
+			pCurrent = pNextPoint;
+		}
+
+		pNext = *((void**)pNext);
+	} while (pCurrent != pNext);
 }
 
 void __cdecl _beginthread_proc(void*)
@@ -63,8 +103,7 @@ void create_debug()
 #ifdef _DEBUG
 	AllocConsole();
 	SetConsoleTitleA("CSGO游戏调试台");
-	freopen("con", "w", stdout);
-	system("mode con cols=50 lines=50");
+	freopen("CON", "w", stdout);
 #endif 
 }
 
@@ -121,7 +160,7 @@ HRESULT _stdcall my_reset(IDirect3DDevice9* pDirect3DDevice,
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 HRESULT _stdcall my_proc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	if (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam)) return TRUE;
+	if (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam)) return  TRUE;
 
 	if (uMsg == WM_KEYDOWN && wParam == VK_INSERT) g_data.show_meun = !g_data.show_meun;
 
@@ -134,8 +173,16 @@ void init_imgui()
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO(); (void)io;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-	io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\msyh.ttc", 15.0f, NULL, io.Fonts->GetGlyphRangesChineseFull());
 	ImGui::StyleColorsLight();
+	const char* font_path = "c:\\msyh.ttc";
+	if(std::filesystem::exists(font_path))
+		io.Fonts->AddFontFromFileTTF(font_path, 20.0f, NULL, io.Fonts->GetGlyphRangesChineseFull());
+	else
+	{
+		char buffer[1024];
+		sprintf(buffer, "需要将msyh.ttc字体文件放到C盘根目录下才能正常中文的显示");
+		MessageBoxA(NULL, buffer, "字体问题", NULL);
+	}
 
 	ImGui_ImplWin32_Init(g_data.game_hwnd);
 	ImGui_ImplDX9_Init(g_data.d3d_hook.GetGameDirect3DDevice());
@@ -148,14 +195,15 @@ void init_gamedatas()
 	HMODULE engine = GetModuleHandleA("engine");
 
 #ifdef _DEBUG
+	printf("Buffer");
 	cout << "game process -> " << g_data.game_proc << endl;
 	cout << "client_panorama address -> " << client_panorama << endl;
 	cout << "engine address -> " << engine << endl;
 #endif
 
-	const int matrix_offset = 0x4D36454;
+	const int matrix_offset = 0x4D36334;
 	const int self_offset = 0xD30B84;
-	const int enemy_offset = 0x4D44A04;
+	const int enemy_offset = 0x4D449F4;
 	const int angle_offset = 0x589D9C;
 
 	g_data.matrix_address = (int)client_panorama + matrix_offset;
@@ -166,14 +214,17 @@ void init_gamedatas()
 
 void draw_meun()
 {
-	ImGui_ImplDX9_NewFrame();
-	ImGui_ImplWin32_NewFrame();
-	ImGui::NewFrame();
-
 	if (g_data.show_meun)
 	{
+		ImGui_ImplDX9_NewFrame();
+		ImGui_ImplWin32_NewFrame();
+		ImGui::NewFrame();
+
+
 		ImGui::Begin(u8"CSGO游戏辅助", &g_data.show_meun);
 		ImGui::Text(u8"[Ins]		显示/关闭");
+		ImGui::Text(u8"更新时间 : 2020 / 3 / 27");
+		ImGui::Text(u8"提示:如果发现墙体纹理抖动情况，请隐藏当前辅助菜单即可解决!!!");
 		ImGui::Separator();
 
 		ImGui::Checkbox(u8"敌人方框", &g_data.show_enemy);
@@ -183,7 +234,7 @@ void draw_meun()
 
 		ImGui::Checkbox(u8"开镜自瞄", &g_data.open_mirror);
 		ImGui::SameLine();
-		ImGui::Checkbox(u8"跳跃自瞄", &g_data.player_jump);
+		ImGui::Checkbox(u8"右键自瞄", &g_data.right_down);
 		ImGui::SameLine();
 		ImGui::Checkbox(u8"静步自瞄", &g_data.quiet_step);
 		ImGui::SameLine();
@@ -191,6 +242,9 @@ void draw_meun()
 		ImGui::Separator();
 
 		ImGui::SliderInt(u8"开镜自瞄时间间隔", &g_data.mirror_ms, 5, 100);
+		ImGui::Separator();
+
+		ImGui::SliderInt(u8"自瞄最大容忍角度", &g_data.tolerate_angle, 1, 85);
 		ImGui::Separator();
 
 		ImGui::RadioButton(u8"位置模式", &g_data.mode_type, 0);
@@ -220,6 +274,11 @@ void draw_meun()
 		ImGui::RadioButton(u8"全部举报", &g_super.report_mode, 1);
 		ImGui::SameLine();
 		ImGui::RadioButton(u8"针对举报", &g_super.report_mode, 2);
+		ImGui::SameLine();
+		if (ImGui::Button(u8"清空举报列表")) repoter_players(g_super, true);
+		ImGui::Separator();
+
+		ImGui::SliderInt(u8"举报时间间隔", &g_super.report_time, 0, 100);
 		ImGui::Separator();
 
 		ImGui::Checkbox(u8"举报骂人", &g_super.report_curse);
@@ -231,29 +290,39 @@ void draw_meun()
 		ImGui::Checkbox(u8"举报自瞄", &g_super.report_aim);
 		ImGui::SameLine();
 		ImGui::Checkbox(u8"举报变速", &g_super.report_speed);
+		ImGui::Separator();
 
 		if (g_super.report_mode == 2)
 		{
 			ImGui::Begin(u8"房间成员信息");
-			static int id = 0;
-			ImGui::InputInt(u8"UserID", &id);
-			g_super.target_playerid = id;
+			ImGui::InputInt(u8"UserID", &g_super.target_playerid);
+			ImGui::SliderInt(u8"", &g_super.target_playerid, 0, 5000);
 			for (auto& it : g_super.inline_players) ImGui::BulletText(it.c_str());
 			ImGui::End();
 		}
 
-		ImGui::End();
-	}
+		static char clantag[100] = { 0 };
+		ImGui::InputText(u8"", clantag, 100);
+		ImGui::SameLine();
+		if (ImGui::Button(u8"更改氏族标记")) change_clantag(g_super, clantag);
+		ImGui::Separator();
 
-	ImGui::EndFrame();
-	ImGui::Render();
-	ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+		if (ImGui::Button(u8"建议单击此处退出游戏")) TerminateProcess(g_data.game_proc, 0);
+		ImGui::SameLine();
+		if (ImGui::Button(u8"清除人物方框遗留")) clear_boxs();
+
+		ImGui::End();
+
+		ImGui::EndFrame();
+		ImGui::Render();
+		ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+	}
 }
 
 void hack_manager()
 {
 	bool state = g_data.show_enemy || g_data.show_friend
-		|| g_data.open_mirror || g_data.player_jump
+		|| g_data.open_mirror || g_data.right_down
 		|| g_data.quiet_step || g_data.player_squat
 		|| g_data.ignore_flash || g_data.show_armor
 		|| g_data.show_money || g_data.show_blood;
@@ -282,7 +351,7 @@ void hack_manager()
 
 	int player_base = 0, next_offset = 0x10;
 	int blood_data = 0, blood_offset = 0x100;
-	float pos_data[3]; int pos_offset = 0xA0;
+	float pos_data[3]{ 0,0,0 }; int pos_offset = 0xA0;
 	int camp_data = 0, camp_offset = 0xF4;
 	float flash_data = 2.0f; int flash_offset = 0xA40C;
 	int armor_data = 0, armor_offset = 0xB368;
@@ -397,7 +466,7 @@ void hack_manager()
 		if (g_data.self_camp == camp_data) continue;
 
 		//开启了任一自瞄
-		if (g_data.open_mirror || g_data.player_jump
+		if (g_data.open_mirror || g_data.right_down
 			|| g_data.quiet_step || g_data.player_squat)
 		{
 			if (g_data.mode_type)//骨骼模式
@@ -464,8 +533,8 @@ void hack_manager()
 		}
 		else g_data.start_aim = false;
 
-	if (g_data.player_jump)
-		if (GetAsyncKeyState(VK_SPACE) & 0x8000) aim_bot(self_data, enemy_data);
+	if (g_data.right_down)
+		if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) aim_bot(self_data, enemy_data);
 		else g_data.start_aim = false;
 
 	if (g_data.quiet_step)
@@ -540,7 +609,7 @@ void aim_bot(float* self_data, float* enemy_data)
 	float z = self_data[2] - enemy_data[2];
 	if (g_data.mode_type) z += 60.0f + g_data.aim_offset;	//骨骼模式
 
-	float angle[2];
+	float angle[2], old_angle[2];
 	const float pi = 3.1415f;
 
 	//x
@@ -556,9 +625,33 @@ void aim_bot(float* self_data, float* enemy_data)
 
 	int angle_base = 0, angle_offset = 0x4D88;
 	SIZE_T read_size;
+
 	ReadProcessMemory(g_data.game_proc, (LPCVOID)g_data.angle_address, &angle_base, sizeof(angle_base), &read_size);
 	if (!read_size) return;
-	WriteProcessMemory(g_data.game_proc, (LPVOID)(angle_base + angle_offset), angle, sizeof(angle), &read_size);
+	ReadProcessMemory(g_data.game_proc, (LPCVOID)(angle_base + angle_offset), old_angle, sizeof(old_angle), &read_size);
 	if (!read_size) return;
 
+	//不能超过最大容忍角度
+	if (abs(angle[0] - old_angle[0]) > g_data.tolerate_angle || abs(angle[1] - old_angle[1]) > g_data.tolerate_angle) return;
+
+	WriteProcessMemory(g_data.game_proc, (LPVOID)(angle_base + angle_offset), angle, sizeof(angle), &read_size);
+	if (!read_size) return;
+}
+
+void clear_boxs()
+{
+	const int next_offset = 0x10;
+	int player_base = 0;
+	const int pos_offset = 0xa0;
+	float pos_data[3] = { 300.0f,300.0f,600.0f };
+	SIZE_T read_size;
+	for (int i = 0; i <= 50; i++)
+	{
+		//读取人物基址
+		ReadProcessMemory(g_data.game_proc, (LPCVOID)(g_data.enemy_address + i * next_offset), &player_base, sizeof(player_base), &read_size);
+		if (!read_size) return;
+
+		//写入人物位置
+		WriteProcessMemory(g_data.game_proc, (LPVOID)(player_base + pos_offset), pos_data, sizeof(pos_data), &read_size);
+	}
 }

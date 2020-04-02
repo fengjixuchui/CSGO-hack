@@ -9,10 +9,12 @@
 
 #include "D3DHook.h"
 #include "SuperHack.h"
+#include <filesystem>
 
 //游戏数据保存结构
 typedef struct game_data
 {
+	void* dll_module;								//当前dll基址
 	d3dhook::D3DHook d3d_hook;			//hook类
 	DWORD pid;										//游戏进程ID
 	HANDLE game_proc;							//游戏进程句柄
@@ -32,10 +34,11 @@ typedef struct game_data
 	bool show_friend;								//显示队友
 
 	bool open_mirror;								//开镜自瞄
-	bool player_jump;								//跳跃自瞄
+	bool right_down;									//右键自瞄
 	bool quiet_step;									//静步自瞄
 	bool player_squat;								//下蹲自瞄
 
+	int tolerate_angle;								//最大容忍角度
 	int mirror_ms;										//开镜自瞄开枪间隔
 	int mode_type;									//模式类型
 	int distance_type;								//距离类型
@@ -54,9 +57,14 @@ typedef struct game_data
 	{
 		show_meun = true;
 		aim_offset = 1.5f;
+		mode_type = 1;
 		mirror_ms = 25;
+		tolerate_angle = 45;
 	}
 }game_data;
+
+//隐藏自身模块
+void hide_self(void* module);
 
 //初始化线程函数
 void __cdecl  _beginthread_proc(void*);
@@ -112,5 +120,7 @@ void draw_meney(int x, int y, int w, int meney);
 //开始自瞄
 void aim_bot(float* self_data, float* enemy_data);
 
+//清空人物方框遗留
+void clear_boxs();
 
 
